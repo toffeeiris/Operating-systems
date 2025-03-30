@@ -20,25 +20,27 @@ typedef struct
 void* func(void* arg)
 {
     targs *args = (targs*) arg;
-    int buffer;
+    char msg[16];
     while (args->flag == 0)
     {
-        buffer = getpagesize();
-        printf("Данные для записи в очередь: %d\n", buffer);
-        char msg[sizeof(int)];
-        sprintf(msg, "%d", buffer);
-        int result = mq_send(args->mqid, msg, sizeof(int), 1);  
-        if (result == -1)
+        int result = mq_receive(args->mqid, msg, 16, NULL);
+        if (result > 0)
         {
-            perror("mq_send");
+            int buffer = 0;
+            buffer = atoi(msg);
+            printf("Данные, полученные из очереди: %d\n", buffer);
         }
-        sleep(1);
+        else if (result == -1)
+        {
+            perror("mq_receive");
+            sleep(1);
+        }
     }
 }
 
 int main()
 {
-    printf("Программа 1 начала работу\n");
+    printf("Программа 2 начала работу\n");
     targs curr;
     curr.flag = 0;
 
@@ -48,7 +50,7 @@ int main()
     attr.mq_msgsize = 16;
     attr.mq_curmsgs = 0;
 
-    curr.mqid = mq_open("/myqueue", O_CREAT | O_WRONLY | O_NONBLOCK, 0644, &attr); 
+    curr.mqid = mq_open("/myqueue", O_CREAT | O_RDONLY | O_NONBLOCK, 0644, &attr);     
     pthread_create(&curr.p_ind, NULL, func, &curr);
 
     printf("Программа ждет нажатия клавиши\n");
@@ -60,7 +62,6 @@ int main()
     mq_close(curr.mqid);
     mq_unlink("/myqueue");
 
-    printf("Программа 1 завершила работу\n");
+    printf("Программа 2 завершила работу\n");
     return 0;
 }
-
