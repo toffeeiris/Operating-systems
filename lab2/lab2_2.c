@@ -6,6 +6,7 @@ typedef struct
 {
     int flag;
     char sym;
+    pthread_mutex_t *mutex;
 }targs;
 
 
@@ -17,12 +18,14 @@ void* proc1(void *arg)
     {
         int counter = 0;
         //Вход в КУ
+        pthread_mutex_lock(args->mutex);
         while (counter++ <= 10)
         {
             putchar(args->sym);
             fflush(stdout);
             sleep(1);
         }
+        pthread_mutex_unlock(args->mutex);
         //Выход из КУ
         sleep(1);
     }
@@ -38,12 +41,14 @@ void* proc2(void *arg)
     {
         int counter = 0;
         //Вход в КУ
+        pthread_mutex_lock(args->mutex);
         while (counter++ <= 10)
         {
             putchar(args->sym);
             fflush(stdout);
             sleep(1);
         }
+        pthread_mutex_unlock(args->mutex);
         //Выход из КУ
         sleep(1);
     }
@@ -53,14 +58,19 @@ void* proc2(void *arg)
 
 int main()
 {
-    printf("Программа № 1 начала работу\n");
+    printf("Программа № 2 начала работу\n");
     pthread_t ind1, ind2;
     targs arg1, arg2;
+    pthread_mutex_t mutex;
+    pthread_mutex_init(&mutex, NULL);
     arg1.flag = 0;
     arg1.sym = '1';
+    arg1.mutex = &mutex;
     arg2.flag = 0;
     arg2.sym = '2';
+    arg2.mutex = &mutex;
     int *exitcode1, *exitcode2;
+    
     pthread_create(&ind1, NULL, proc1, &arg1);
     pthread_create(&ind2, NULL, proc2, &arg2);
     printf("Программа ждет нажатия клавиши\n");
@@ -72,6 +82,7 @@ int main()
     printf("exitcode1 = %p\n", exitcode1);
     pthread_join(ind2, (void**)&exitcode2);
     printf("exitcode2 = %p\n", exitcode2);
-    printf("Программа № 1 завершила работу\n");
+    pthread_mutex_destroy(&mutex);
+    printf("Программа № 2 завершила работу\n");
     return 0;
 }
