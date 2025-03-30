@@ -44,7 +44,7 @@ void sig_handler(int signo)
     if (final)
     {
         final->flag = 1;
-        sem_post(final->sem_read);
+        sem_post(final->sem_write);                            
         pthread_join(final->ind, NULL);
 
         sem_close(final->sem_read);
@@ -54,7 +54,8 @@ void sig_handler(int signo)
         shmdt(final->shm_addr);
         shmctl(final->shmid, IPC_RMID, NULL);
     }
-    printf("\nПрограмма 1 завершила работу\n");
+    
+    printf("\nПрограмма 2 завершила работу\n");
     reset_terminal();
     exit(0);
 }
@@ -62,20 +63,20 @@ void sig_handler(int signo)
 void* func(void* arg)
 {
     targs *args = (targs*) arg;
+    int data;
     while (args->flag == 0)
     {
-        int data = getpagesize();
-        printf("Данные для передачи: %d\n", data);
-        memcpy(args->shm_addr, &data, sizeof(data));
-        sem_post(args->sem_write);
-        if (sem_wait(args->sem_read) != 0) break;
-        sleep(1);
+        if (sem_wait(args->sem_write) != 0) break;
+        memcpy(&data, args->shm_addr, sizeof(data));
+        if (args->flag == 0)
+            printf("Переданные данные: %d\n", data);
+        sem_post(args->sem_read);
     }
 }
 
 int main()
 {
-    printf("Программа 1 начала работу\n");
+    printf("Программа 2 начала работу\n");
         
     targs curr;
     curr.flag = 0;
@@ -104,7 +105,7 @@ int main()
     struct sigaction sa;
     sa.sa_handler = sig_handler;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_RESTART; // перезапуск системы для избежания блокировки
+    sa.sa_flags = SA_RESTART;
     sigaction(SIGINT, &sa, NULL);
 
     printf("Программа ждет нажатия клавиши\n");
@@ -113,7 +114,7 @@ int main()
 
     curr.flag = 1;
     pthread_join(curr.ind, NULL);
-
+    
     sem_close(curr.sem_read);
     sem_unlink("/sem_read");
     sem_close(curr.sem_write);
@@ -121,6 +122,6 @@ int main()
     shmdt(curr.shm_addr);
     shmctl(curr.shmid, IPC_RMID, NULL);
 
-    printf("Программа 1 завершила работу\n");
+    printf("Программа 2 завершила работу\n");
     return 0;
 }
