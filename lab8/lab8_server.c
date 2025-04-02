@@ -40,13 +40,13 @@ typedef struct
 
 void* func_receive(void* arg)
 {
-    info *args = (info*) arg;
+    main_info *args = (main_info*) arg;
     int buffer = 0;
     struct entry *item;
     int counter = 0;
-    while(args->flag_receive == 0)
+    while(args->receive.flag == 0)
     {
-        int rv = recvfrom(args->sock_work, buffer, sizeof(int), 0, (struct sockaddr*)&args->client_addr, sizeof(args->client_addr));
+        int rv = recvfrom(args->sock_work, buffer, sizeof(buffer), 0, (struct sockaddr*)&args->client_addr, sizeof(args->client_addr));
         if (rv < 0)
         {
             perror("recvfrom");
@@ -54,26 +54,25 @@ void* func_receive(void* arg)
         }
         else
         {
-            pthrad_mutex_lock(args->mutex_connect);
+            pthrad_mutex_lock(args->connect.mutex);
             item  = malloc(sizeof(struct entry));
             item->data = buffer;
-            pthrad_mutex_unlock(args->mutex_connect);
+            pthrad_mutex_unlock(args->connect.mutex);
             //getcockname();
-            printf("Запрос #%d принят", counter);
+            printf("Запрос #%d принят: %d", ++counter, buffer);
             printf("client: ip = %s; port = %d", inet_ntoa(args->client_addr.sin_addr), ntohs(args->client_addr.sin_port));
-            counter++;
         }
     }
 }
 
-void* func_transfer(void *arg)
+void* func_process_transfer(void *arg)
 {
-    info *args = (info*) arg;
+    main_info *args = (main_info*) arg;
     struct entry *item;
     int counter = 0;
-    while(args->flag_transfer == 0)
+    while(args->process_transfer.flag == 0)
     {
-        item = STAILQ_FIRST(&args->head);
+        item = STAILQ_FIRST(&head);
         int buffer = getpagesize();
         int sv = sendto(args->sock_work, buffer, sizeof(buffer), 0, (const struct sockaddr*)&args->client_addr, sizeof(args->client_addr));
 
@@ -81,12 +80,11 @@ void* func_transfer(void *arg)
         {
             perror("sendto");
             sleep(1);
+            continue;
         }
         else
         {
-            printf("Было передано: %d\n", buffer); //??
-            printf("Ответ на запрос #%d передан", counter);
-            counter++;
+            printf("Ответ на запрос #%d передан: %d", ++counter, buffer);
         }
     }
 }
@@ -97,20 +95,18 @@ void* func_connect(void *arg)
     struct entry *item;
     while(args->connect.flag == 0)
     {
-        pthread_mutex_lock(args->mutex_connect);
-        if (STAILQ_EMPTY(&args->head))
+        pthread_mutex_lock(args->connect.mutex);
+        if (STAILQ_EMPTY(&head))
         {
-            printf("Соедиенение установлено");
-            //
-            pthread_mutex_unlock(args->mutex_connect);
-            pthread_create(&args->ind_receive, NULL, NULL, NULL);
-            pthread_create(&args->ind_transfer, NULL, NULL, NULL);
-            pthread_join(args->ind_connect, NULL);
+            pthread_mutex_unlock(args->connect.mutex);
+            pthread_create(&args->receive.ind, NULL, func_receive, &args->receive);
+            pthread_create(&args->process_transfer.ind, NULL, func_process_transfer, &args->process_transfer);
+            pthread_join(args->connect.ind, NULL);
         }
         else
         {
             perror("no connection");
-            pthread_mutex_unlock(args->mutex_connect);
+            pthread_mutex_unlock(args->connect.mutex);
             sleep(1);
             continue;
         }
@@ -140,7 +136,7 @@ int main()
 
     //setsockopt(this.sock_linten, SOL_SOCKET, SO_REUSEADDR, 1, sizeof(1));
     STAILQ_INIT(&head);
-    pthread_create(this.connect.ind, NULL, func_connect, &this.connect);
+    pthread_create(this.connect.ind, NULL, func_connect, &this);
 
     printf("Программа ждет нажатия клавиши\n");
     getchar();
