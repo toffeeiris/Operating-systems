@@ -8,6 +8,7 @@
 #include <signal.h>
 #include <string.h>
 #include <mqueue.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/queue.h>
 #include <sys/socket.h>
@@ -17,12 +18,12 @@
 
 struct entry
 {
-    char* data;
+    char* data[32];
     STAILQ_ENTRY(entry) entries;
 };
 
-struct stailhead head;
 STAILQ_HEAD(stailhead, entry) head;
+struct stailhead head;
 
 typedef struct 
 {
@@ -32,11 +33,12 @@ typedef struct
 
 typedef struct 
 {
-    int sock_work, sock_linten;
+    int sock;
     struct sockaddr_in server_addr, client_addr;
     pthread_mutex_t mutex;
+    int request_counter;
     
-    curr_info receive, process_transfer, connect;
+    curr_info receive, process_transfer;
 
 }main_info;
 
@@ -44,14 +46,11 @@ void* func_receive(void* arg)
 {
     printf("Поток приема начал работу\n");
     main_info *args = (main_info*) arg;
-    int buffer = 0;
-    char msg[16];
-    sprintf(msg, "%d\n", buffer);
-    struct entry *item;
     while(args->receive.flag == 0)
     {
+        char msg[32];
         socklen_t slen = sizeof(args->client_addr);
-        int rv = recvfrom(args->sock_work, msg, sizeof(msg), 0, (struct sockaddr*)&args->client_addr, &slen);
+        int rv = recvfrom(args->sock, msg, sizeof(msg), 0, (struct sockaddr*)&args->client_addr, &slen);
         if (rv == -1)
         {
             perror("receive");
@@ -59,11 +58,13 @@ void* func_receive(void* arg)
         }
         else
         {
+            struct entry *item  = malloc(sizeof(struct entry));
+            strncpy(item->data, msg, sizeof(item->data));
             pthread_mutex_lock(&args->mutex);
-            item  = malloc(sizeof(struct entry));
-            item->data = msg;
+            sscanf(msg, "%d", &args->request_counter);
             STAILQ_INSERT_TAIL(&head, item, entries);
             pthread_mutex_unlock(&args->mutex);
+            printf("Запрос #%d принят\n", args->request_counter); 
         }
     }
     printf("Поток приема закончил работу\n");
@@ -73,36 +74,33 @@ void* func_process_transfer(void *arg)
 {
     printf("Поток обработки и передачи начал работу\n");
     main_info *args = (main_info*) arg;
-    struct entry *head_item;
-    int counter = 0;
     while(args->process_transfer.flag == 0)
     {
         pthread_mutex_lock(&args->mutex);
-        head_item = STAILQ_FIRST(&head);
+
+        if (STAILQ_EMPTY(&head))
+        {
+            pthread_mutex_unlock(&args->mutex);
+            usleep(10000);
+            continue;
+        }
+
+        struct entry *item = STAILQ_FIRST(&head);
         STAILQ_REMOVE_HEAD(&head, entries);
+
+        struct sockaddr_in client = args->client_addr;
+        int request_id;
+        sscanf(item->data, "%d", &request_id);
+
         pthread_mutex_unlock(&args->mutex);
-        char* curr_item = head_item->data;
-
-        while(!isdigit(*curr_item))
-        {
-            curr_item++;
-        }
-
-        while(isdigit(*curr_item))
-        {
-            counter = counter * 10 + *curr_item - 48;
-            curr_item++;
-        }
-
-        printf("Запрос #%d принят\n", counter);
-        free(head_item);
 
         int buffer = getpagesize();
-        char msg[16];
-        sprintf(msg, "%d\n", buffer);
+        char msg[32];
+        snprintf(msg, sizeof(msg), "%d:%d", args->request_counter, buffer);
 
         socklen_t slen = sizeof(args->client_addr);
-        int sv = sendto(args->sock_work, msg, sizeof(msg), 0, (const struct sockaddr*)&args->client_addr, slen);
+        int sv = sendto(args->sock, msg, sizeof(msg), 0, (const struct sockaddr*)&args->client_addr, slen);
+        free(item);
 
         if (sv == -1)
         {
@@ -112,72 +110,57 @@ void* func_process_transfer(void *arg)
         }
         else
         {
-            printf("Ответ на запрос #%d передан: %d\n", counter, buffer);
+            printf("Ответ на запрос #%d передан: %d\n", request_id, buffer);
         }
     }
     printf("Поток обработки и передачи закончил работу\n");
 }
 
-void* func_connect(void *arg)
-{
-    main_info *args = (main_info*) arg;
-    struct entry *item;
-    while(args->connect.flag == 0)
-    {
-        pthread_mutex_lock(&args->mutex);
-        if (STAILQ_EMPTY(&head))
-        {
-            pthread_mutex_unlock(&args->mutex);
-            pthread_create(&args->receive.ind, NULL, func_receive, &args->receive);
-            pthread_create(&args->process_transfer.ind, NULL, func_process_transfer, &args->process_transfer);
-            pthread_join(args->connect.ind, NULL);
-        }
-        else
-        {
-            perror("no connection");
-            pthread_mutex_unlock(&args->mutex);
-            sleep(1);
-            continue;
-        }
-    }
-}
 
 int main()
 {
     printf("Программа-сервер начала работу\n");
     main_info this;
-    this.receive.flag = 0;
-    this.process_transfer.flag = 0;
-    this.connect.flag = 0;
+    memset(&this, 0, sizeof(this));
     pthread_mutex_init(&this.mutex, NULL);
 
-    this.sock_work = socket(AF_INET, SOCK_DGRAM, 0);
-    this.server_addr.sin_port = htons(7000);
-    this.server_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-    fcntl(this.sock_work, F_SETFL, O_NONBLOCK);
-    int bsl = bind(this.sock_work, (const struct sockaddr*)&this.server_addr, sizeof(this.server_addr));
+    this.sock = socket(AF_INET, SOCK_DGRAM, 0);
 
+    if (this.sock == -1)
+    {
+        perror("socket");
+        exit(EXIT_FAILURE);
+    }
+
+    memset(&this.server_addr, 0, sizeof(this.server_addr));
+    this.server_addr.sin_family = AF_INET;
+    this.server_addr.sin_port = htons(7000);
+    this.server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    int bsl = bind(this.sock, (const struct sockaddr*)&this.server_addr, sizeof(this.server_addr));
     if (bsl < 0)
     {
         perror("bind");
-        sleep(1);
+        close(this.sock);
+        exit(EXIT_FAILURE);
     }
 
+    fcntl(this.sock, F_SETFL, O_NONBLOCK);
     STAILQ_INIT(&head);
-    pthread_create(&this.connect.ind, NULL, func_connect, &this);
+    pthread_create(&this.receive.ind, NULL, func_receive, &this);
+    pthread_create(&this.process_transfer.ind, NULL, func_process_transfer, &this);
 
     printf("Программа ждет нажатия клавиши\n");
     getchar();
     printf("Клавиша нажата\n");
     this.receive.flag = 1;
     this.process_transfer.flag = 1;
-    this.connect.flag = 1;
     pthread_join(this.receive.ind, NULL);
     pthread_join(this.process_transfer.ind, NULL);
-    pthread_join(this.connect.ind, NULL);
 
-    close(this.sock_linten);
-    close(this.sock_work);
+    close(this.sock);
+    pthread_mutex_destroy(&this.mutex);
 
     printf("Программа-сервер завершила работу\n");
+    return 0;
 }
